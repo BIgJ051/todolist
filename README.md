@@ -42,7 +42,7 @@
                     └─ RLS: auth.uid() = user_id
 ```
 
-앱 시작 시 Supabase에 저장된 데이터가 있으면 이를 불러옵니다. 원격 데이터가 없으면 기존 로컬 데이터를 최초 1회 업로드합니다. 이후 변경 사항은 로컬 캐시에 먼저 저장하고 Supabase에 순차적으로 동기화합니다.
+앱 시작 시 Supabase에 저장된 데이터가 있으면 이를 불러옵니다. 원격 데이터가 없으면 기존 로컬 데이터를 최초 1회 업로드합니다. 이후 생성·수정·삭제는 해당 행에만 적용되며, 작업 순서는 브라우저의 동기화 큐에서 보장됩니다. `updated_at` 버전이 달라지면 원격 변경을 우선해 충돌 데이터를 다시 불러옵니다.
 
 ## 로컬 실행
 
@@ -66,7 +66,8 @@ todolist/
 ├── supabase/
 │   ├── README.md                     # Supabase 설정 및 운영 안내
 │   └── migrations/
-│       └── 20260818_create_tasks.sql # 테이블, 권한, RLS, 트리거
+│       ├── 20260818_create_tasks.sql  # 신규 프로젝트용 전체 스키마
+│       └── 20260818_row_level_sync.sql # 기존 프로젝트 업그레이드
 └── README.md
 ```
 
@@ -81,7 +82,7 @@ todolist/
 
 ## 배포
 
-`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 저장소 전체를 GitHub Pages 아티팩트로 배포합니다.
+`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 JavaScript 구문과 브라우저 설정의 Secret key 포함 여부를 검사한 뒤, 저장소 전체를 GitHub Pages 아티팩트로 배포합니다.
 
 배포 후 다음 항목을 확인합니다.
 

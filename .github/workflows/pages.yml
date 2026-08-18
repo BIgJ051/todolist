@@ -15,7 +15,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate JavaScript syntax
+        run: node --check app.js
+
+      - name: Reject secret keys in browser config
+        shell: bash
+        run: |
+          if grep -Eq 'sb_secret_|service_role[^[:space:]]*:' supabase-config.js; then
+            echo "Secret Supabase key detected in browser configuration."
+            exit 1
+          fi
+
   deploy:
+    needs: validate
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

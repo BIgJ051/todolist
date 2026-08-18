@@ -27,6 +27,14 @@ migrations/20260818_create_tasks.sql
 
 정상 실행 결과는 `Success. No rows returned`입니다.
 
+기존 스냅샷 동기화 버전을 이미 사용 중인 프로젝트는 다음 업그레이드 마이그레이션도 실행합니다.
+
+```text
+migrations/20260818_row_level_sync.sql
+```
+
+이 마이그레이션은 기본키를 `(user_id, id)`로 변경해 사용자 사이의 ID 충돌을 방지하고, 조회 순서 인덱스와 최적화된 RLS 정책을 적용합니다.
+
 ## 3. 익명 인증 활성화
 
 Dashboard의 **Authentication → Sign In / Providers**에서 **Anonymous Sign-Ins**를 활성화하고 저장합니다.
@@ -66,7 +74,7 @@ https://bigj051.github.io/todolist/app.js
 
 | 열 | 형식 | 설명 |
 |---|---|---|
-| `id` | `text` | 프런트엔드에서 생성하는 할 일 ID |
+| `id` | `text` | 프런트엔드에서 생성하는 사용자 내부 할 일 ID |
 | `user_id` | `uuid` | Supabase Auth 사용자 ID |
 | `title` | `text` | 할 일 제목 |
 | `category` | `text` | `work`, `personal`, `study`, `health`, `finance` |
@@ -93,10 +101,12 @@ auth.uid() = user_id
 
 1. 앱 시작 시 기존 Supabase 세션을 불러옵니다.
 2. 세션이 없으면 `signInAnonymously()`를 실행합니다.
-3. 원격 행이 있으면 `sort_order` 기준으로 불러와 로컬 캐시를 갱신합니다.
-4. 원격 행이 없으면 기존 `localStorage` 데이터를 업로드합니다.
-5. 이후 CRUD 및 순서 변경 시 로컬 캐시 저장 후 원격 스냅샷을 동기화합니다.
-6. 네트워크 또는 Supabase 오류가 발생하면 로컬 데이터는 유지되고 화면에 실패 알림이 표시됩니다.
+3. 원격 행이 있으면 `sort_order` 기준으로 불러와 로컬 캐시와 행 버전을 갱신합니다.
+4. 원격 행이 없으면 기존 `localStorage` 데이터를 최초 1회 업로드합니다.
+5. 생성은 `insert`, 수정·완료·순서 변경은 행별 `update`, 삭제는 ID별 `delete`로 처리합니다.
+6. 작업은 브라우저의 단일 비동기 큐에서 순서대로 실행됩니다.
+7. 수정·삭제 시 마지막 `updated_at`을 조건으로 사용합니다. 원격 버전이 달라졌다면 현재 작업을 덮어쓰지 않고 해당 행을 다시 불러옵니다.
+8. 네트워크 또는 Supabase 오류가 발생하면 로컬 데이터는 유지되고 화면에 실패 알림이 표시됩니다.
 
 ## 문제 해결
 

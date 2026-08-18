@@ -240,6 +240,7 @@
   let supabaseUser = null;
   let supabaseSyncQueue = Promise.resolve();
   let supabaseLastError = null;
+  const remoteVersions = new Map();
 
   function getSupabaseConfig() {
     const config = window.SUPABASE_CONFIG;
@@ -310,49 +311,146 @@
       completed: Boolean(row.is_completed),
       starred: Boolean(row.is_starred),
       createdAt: row.created_at,
-      order: row.sort_order
+      order: row.sort_order,
+      updatedAt: row.updated_at
     };
   }
 
-  async function replaceRemoteTasks(tasks) {
-    if (!supabaseClient || !supabaseUser) return;
+  function rememberRemoteRow(row) {
+    if (!row) return;
+    remoteVersions.set(row.id, row.updated_at);
+    const task = state.tasks.find(item => item.id === row.id);
+    if (task) task.updatedAt = row.updated_at;
+  }
 
-    const { data: currentRows, error: readError } = await supabaseClient
-      .from('tasks')
-      .select('id');
-    if (readError) throw readError;
-
-    const rows = tasks.map(taskToRow);
-    if (rows.length) {
-      const { error } = await supabaseClient
-        .from('tasks')
-        .upsert(rows, { onConflict: 'id' });
-      if (error) throw error;
-    }
-
-    const activeIds = new Set(rows.map(row => row.id));
-    const removedIds = (currentRows || [])
-      .map(row => row.id)
-      .filter(id => !activeIds.has(id));
-    if (removedIds.length) {
-      const { error } = await supabaseClient
-        .from('tasks')
-        .delete()
-        .in('id', removedIds);
-      if (error) throw error;
+  function saveLocalTasks() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
+    } catch (error) {
+      console.error('Error saving tasks locally:', error);
     }
   }
 
-  function queueSupabaseSync() {
+  async function resolveRemoteConflict(id) {
+    const { data: remoteRow, error } = await supabaseClient
+      .from('tasks')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+
+    const localIndex = state.tasks.findIndex(task => task.id === id);
+    if (remoteRow) {
+      const remoteTask = rowToTask(remoteRow);
+      if (localIndex === -1) state.tasks.push(remoteTask);
+      else state.tasks[localIndex] = remoteTask;
+      rememberRemoteRow(remoteRow);
+    } else if (localIndex !== -1) {
+      state.tasks.splice(localIndex, 1);
+      remoteVersions.delete(id);
+    }
+
+    saveLocalTasks();
+    updateUI();
+    showToast('다른 기기에서 변경된 할 일을 최신 값으로 다시 불러왔습니다.', 'warning');
+  }
+
+  function queueSupabaseOperation(operation) {
     if (!supabaseClient || !supabaseUser) return;
-    const snapshot = state.tasks.map(task => ({ ...task }));
     supabaseSyncQueue = supabaseSyncQueue
-      .then(() => replaceRemoteTasks(snapshot))
+      .then(operation)
       .catch(error => {
         supabaseLastError = error;
         console.error('Supabase sync failed. Local changes were kept.', error);
         showToast('Supabase 저장에 실패했습니다. 브라우저 콘솔을 확인해 주세요.', 'danger');
       });
+  }
+
+  function persistCreatedTasks(tasks) {
+    const snapshots = tasks.map(task => ({ ...task }));
+    if (!snapshots.length) return;
+
+    queueSupabaseOperation(async () => {
+      const { data, error } = await supabaseClient
+        .from('tasks')
+        .insert(snapshots.map(taskToRow))
+        .select('*');
+      if (error) throw error;
+      (data || []).forEach(rememberRemoteRow);
+      saveLocalTasks();
+    });
+  }
+
+  function persistUpdatedTasks(tasks) {
+    const snapshots = tasks.map(task => ({ ...task }));
+    if (!snapshots.length) return;
+
+    queueSupabaseOperation(async () => {
+      for (const task of snapshots) {
+        const knownVersion = remoteVersions.get(task.id);
+        let query = supabaseClient
+          .from('tasks')
+          .update(taskToRow(task))
+          .eq('id', task.id);
+        if (knownVersion) query = query.eq('updated_at', knownVersion);
+
+        const { data, error } = await query.select('*').maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          await resolveRemoteConflict(task.id);
+          continue;
+        }
+        rememberRemoteRow(data);
+      }
+      saveLocalTasks();
+    });
+  }
+
+  function persistDeletedTasks(tasks) {
+    const snapshots = tasks.map(task => ({ ...task }));
+    if (!snapshots.length) return;
+
+    queueSupabaseOperation(async () => {
+      for (const task of snapshots) {
+        const knownVersion = remoteVersions.get(task.id) || task.updatedAt;
+        let query = supabaseClient
+          .from('tasks')
+          .delete()
+          .eq('id', task.id);
+        if (knownVersion) query = query.eq('updated_at', knownVersion);
+
+        const { data, error } = await query.select('id').maybeSingle();
+        if (error) throw error;
+        if (!data && knownVersion) {
+          await resolveRemoteConflict(task.id);
+          continue;
+        }
+        remoteVersions.delete(task.id);
+      }
+    });
+  }
+
+  function persistReplacedTaskSet(previousTasks, nextTasks) {
+    const previousById = new Map(previousTasks.map(task => [task.id, task]));
+    const nextIds = new Set(nextTasks.map(task => task.id));
+    const removed = previousTasks.filter(task => !nextIds.has(task.id));
+    const created = nextTasks.filter(task => !previousById.has(task.id));
+    const updated = nextTasks.filter(task => previousById.has(task.id));
+
+    persistDeletedTasks(removed);
+    persistCreatedTasks(created);
+    persistUpdatedTasks(updated);
+  }
+
+  async function uploadInitialTasks(tasks) {
+    if (!tasks.length) return;
+    const { data, error } = await supabaseClient
+      .from('tasks')
+      .insert(tasks.map(taskToRow))
+      .select('*');
+    if (error) throw error;
+    (data || []).forEach(rememberRemoteRow);
+    saveLocalTasks();
   }
 
   async function loadTasks() {
@@ -362,7 +460,7 @@
         state.tasks = JSON.parse(saved);
       } else {
         state.tasks = [...DEFAULT_TASKS];
-        saveTasks();
+        saveLocalTasks();
       }
     } catch (e) {
       console.error('Error loading tasks:', e);
@@ -381,22 +479,14 @@
 
       if (remoteRows && remoteRows.length) {
         state.tasks = remoteRows.map(rowToTask);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
+        remoteRows.forEach(rememberRemoteRow);
+        saveLocalTasks();
       } else if (state.tasks.length) {
-        await replaceRemoteTasks(state.tasks);
+        await uploadInitialTasks(state.tasks);
       }
     } catch (error) {
       supabaseLastError = error;
       console.error('Could not load tasks from Supabase. Continuing with local storage.', error);
-    }
-  }
-
-  function saveTasks() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
-      queueSupabaseSync();
-    } catch (e) {
-      console.error('Error saving tasks:', e);
     }
   }
 
@@ -691,7 +781,9 @@
     // re-index order
     state.tasks.forEach((t, i) => t.order = i);
 
-    saveTasks();
+    saveLocalTasks();
+    persistCreatedTasks([newTask]);
+    persistUpdatedTasks(state.tasks.filter(task => task.id !== newTask.id));
     updateUI();
     AudioEngine.playAddSound();
     showToast('새로운 할 일이 추가되었습니다.', 'success');
@@ -702,7 +794,8 @@
     if (!task) return;
 
     task.completed = !task.completed;
-    saveTasks();
+    saveLocalTasks();
+    persistUpdatedTasks([task]);
     updateUI();
 
     if (task.completed) {
@@ -726,7 +819,8 @@
     if (!task) return;
 
     task.starred = !task.starred;
-    saveTasks();
+    saveLocalTasks();
+    persistUpdatedTasks([task]);
     updateUI();
     AudioEngine.playTone(600, 'sine', 0.08, 0.05);
   }
@@ -737,7 +831,9 @@
 
     const [deleted] = state.tasks.splice(idx, 1);
     state.tasks.forEach((t, i) => t.order = i);
-    saveTasks();
+    saveLocalTasks();
+    persistDeletedTasks([deleted]);
+    persistUpdatedTasks(state.tasks);
     updateUI();
     AudioEngine.playDeleteSound();
     showToast(`"${deleted.title}" 삭제되었습니다.`, 'warning');
@@ -777,7 +873,8 @@
     task.dueDate = elements.editDueDateInput.value;
     task.notes = elements.editNotesTextarea.value.trim();
 
-    saveTasks();
+    saveLocalTasks();
+    persistUpdatedTasks([task]);
     updateUI();
     closeEditModal();
     AudioEngine.playTone(550, 'sine', 0.1, 0.08);
@@ -826,7 +923,8 @@
           const [movedTask] = state.tasks.splice(fromIdx, 1);
           state.tasks.splice(toIdx, 0, movedTask);
           state.tasks.forEach((t, i) => t.order = i);
-          saveTasks();
+          saveLocalTasks();
+          persistUpdatedTasks(state.tasks);
           updateUI();
           AudioEngine.playTone(480, 'sine', 0.08, 0.05);
         }
@@ -855,8 +953,10 @@
       try {
         const imported = JSON.parse(evt.target.result);
         if (Array.isArray(imported)) {
+          const previousTasks = state.tasks.map(task => ({ ...task }));
           state.tasks = imported;
-          saveTasks();
+          saveLocalTasks();
+          persistReplacedTaskSet(previousTasks, state.tasks);
           updateUI();
           showToast(`성공적으로 ${imported.length}개의 할 일을 가져왔습니다.`, 'success');
         } else {
@@ -1014,8 +1114,12 @@
         return;
       }
       if (confirm(`완료된 할 일 ${completedCount}개를 모두 삭제하시겠습니까?`)) {
+        const completedTasks = state.tasks.filter(t => t.completed);
         state.tasks = state.tasks.filter(t => !t.completed);
-        saveTasks();
+        state.tasks.forEach((task, index) => task.order = index);
+        saveLocalTasks();
+        persistDeletedTasks(completedTasks);
+        persistUpdatedTasks(state.tasks);
         updateUI();
         AudioEngine.playDeleteSound();
         showToast(`${completedCount}개의 완료 항목이 삭제되었습니다.`, 'warning');
@@ -1026,8 +1130,10 @@
     elements.resetAllBtn.addEventListener('click', () => {
       elements.moreMenu.classList.remove('active');
       if (confirm('모든 할 일 데이터가 초기화됩니다. 계속하시겠습니까?')) {
-        state.tasks = [...DEFAULT_TASKS];
-        saveTasks();
+        const previousTasks = state.tasks.map(task => ({ ...task }));
+        state.tasks = DEFAULT_TASKS.map(task => ({ ...task }));
+        saveLocalTasks();
+        persistReplacedTaskSet(previousTasks, state.tasks);
         updateUI();
         showToast('데이터가 초기 상태로 복구되었습니다.', 'info');
       }
@@ -1041,7 +1147,8 @@
         return;
       }
       state.tasks.forEach(t => t.completed = true);
-      saveTasks();
+      saveLocalTasks();
+      persistUpdatedTasks(uncompleted);
       updateUI();
       AudioEngine.playCompleteSound();
       triggerCelebration(true);
