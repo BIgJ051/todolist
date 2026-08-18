@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>오늘하루 • 프리미엄 할 일 & 하루 루틴 관리</title>
+  <meta name="description" content="세련되고 강력한 기능의 올인원 투두리스트 웹 애플리케이션">
+  
+  <!-- Google Fonts: Plus Jakarta Sans & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Canvas Confetti for celebrations -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Ambient background glow elements -->
+  <div class="glow-bg glow-1"></div>
+  <div class="glow-bg glow-2"></div>
+  <div class="glow-bg glow-3"></div>
+
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="logo-group">
+        <div class="logo-icon">
+          <i data-lucide="check-check"></i>
+        </div>
+        <div class="logo-text">
+          <h1>오늘하루</h1>
+          <span class="badge-version">플러스</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Sound Effect Toggle -->
+        <button id="soundToggleBtn" class="btn-icon" title="효과음 켜기/끄기" aria-label="사운드 토글">
+          <i data-lucide="volume-2" id="soundIcon"></i>
+        </button>
+
+        <!-- Theme Toggle -->
+        <button id="themeToggleBtn" class="btn-icon" title="다크/라이트 모드 전환" aria-label="테마 전환">
+          <i data-lucide="sun" id="themeIcon"></i>
+        </button>
+
+        <!-- Backup/Restore Dropdown -->
+        <div class="dropdown-wrapper">
+          <button id="moreActionsBtn" class="btn-icon" title="더 보기 및 백업" aria-label="더보기 메뉴">
+            <i data-lucide="more-vertical"></i>
+          </button>
+          <div id="moreMenu" class="dropdown-menu">
+            <button id="exportDataBtn" class="dropdown-item">
+              <i data-lucide="download"></i> 데이터 내보내기 (JSON)
+            </button>
+            <label for="importDataInput" class="dropdown-item file-label">
+              <i data-lucide="upload"></i> 데이터 가져오기
+              <input type="file" id="importDataInput" accept=".json" style="display: none;">
+            </label>
+            <div class="dropdown-divider"></div>
+            <button id="clearAllCompletedBtn" class="dropdown-item text-warning">
+              <i data-lucide="trash-2"></i> 완료된 항목 일괄 삭제
+            </button>
+            <button id="resetAllBtn" class="dropdown-item text-danger">
+              <i data-lucide="rotate-ccw"></i> 전체 데이터 초기화
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Dashboard Layout -->
+    <div class="dashboard-grid">
+      
+      <!-- Sidebar / Summary & Stats -->
+      <aside class="sidebar-panel">
+        <!-- Progress Card -->
+        <div class="card progress-card">
+          <div class="card-header">
+            <h3>오늘의 달성률</h3>
+            <span id="progressPercentage" class="progress-badge">0%</span>
+          </div>
+          <div class="progress-bar-container">
+            <div id="progressBar" class="progress-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div class="stats-mini-grid">
+            <div class="stat-mini-item">
+              <span class="stat-label">전체</span>
+              <span id="totalTaskCount" class="stat-value">0</span>
+            </div>
+            <div class="stat-mini-item">
+              <span class="stat-label">진행중</span>
+              <span id="pendingTaskCount" class="stat-value text-accent">0</span>
+            </div>
+            <div class="stat-mini-item">
+              <span class="stat-label">완료됨</span>
+              <span id="completedTaskCount" class="stat-value text-success">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Category Filter List -->
+        <div class="card category-nav-card">
+          <h4 class="sidebar-heading">카테고리</h4>
+          <nav class="category-nav" id="categoryNav">
+            <button class="cat-nav-item active" data-category="all">
+              <span class="cat-icon-wrap"><i data-lucide="layers"></i></span>
+              <span class="cat-name">전체 보기</span>
+              <span class="cat-count" id="catCountAll">0</span>
+            </button>
+            <button class="cat-nav-item" data-category="work">
+              <span class="cat-icon-wrap cat-work"><i data-lucide="briefcase"></i></span>
+              <span class="cat-name">업무 / 비즈니스</span>
+              <span class="cat-count" id="catCountWork">0</span>
+            </button>
+            <button class="cat-nav-item" data-category="personal">
+              <span class="cat-icon-wrap cat-personal"><i data-lucide="user"></i></span>
+              <span class="cat-name">개인 라이프</span>
+              <span class="cat-count" id="catCountPersonal">0</span>
+            </button>
+            <button class="cat-nav-item" data-category="study">
+              <span class="cat-icon-wrap cat-study"><i data-lucide="book-open"></i></span>
+              <span class="cat-name">공부 / 자기계발</span>
+              <span class="cat-count" id="catCountStudy">0</span>
+            </button>
+            <button class="cat-nav-item" data-category="health">
+              <span class="cat-icon-wrap cat-health"><i data-lucide="heart-pulse"></i></span>
+              <span class="cat-name">운동 / 건강</span>
+              <span class="cat-count" id="catCountHealth">0</span>
+            </button>
+            <button class="cat-nav-item" data-category="finance">
+              <span class="cat-icon-wrap cat-finance"><i data-lucide="wallet"></i></span>
+              <span class="cat-name">재정 / 쇼핑</span>
+              <span class="cat-count" id="catCountFinance">0</span>
+            </button>
+          </nav>
+        </div>
+
+        <!-- Productivity Quote / Tips -->
+        <div class="card quote-card">
+          <div class="quote-icon"><i data-lucide="sparkles"></i></div>
+          <p id="dailyQuote" class="quote-text">"작은 진전이 모여 위대한 성취를 만듭니다."</p>
+          <span class="quote-tip">💡 단축키: <kbd>/</kbd> 검색, <kbd>Enter</kbd> 추가</span>
+        </div>
+      </aside>
+
+      <!-- Main Content Area -->
+      <main class="main-content">
+        
+        <!-- Task Creation Bar / Form -->
+        <div class="card task-input-card">
+          <form id="taskForm" class="task-form" autocomplete="off">
+            <div class="input-primary-row">
+              <span class="input-indicator"><i data-lucide="plus-circle"></i></span>
+              <input 
+                type="text" 
+                id="taskTitleInput" 
+                class="task-text-input" 
+                placeholder="새로운 할 일을 입력하세요... (Enter로 빠르게 등록)" 
+                required
+                maxlength="120"
+              >
+              <button type="submit" class="btn-primary" id="addTaskBtn">
+                <i data-lucide="plus"></i>
+                <span>추가하기</span>
+              </button>
+            </div>
+
+            <!-- Optional Quick Meta Tags / Toggle Options -->
+            <div class="input-meta-row" id="inputMetaRow">
+              <!-- Category Selector -->
+              <div class="select-group">
+                <label for="taskCategorySelect" class="meta-label"><i data-lucide="tag"></i></label>
+                <select id="taskCategorySelect" class="meta-select">
+                  <option value="personal">개인</option>
+                  <option value="work">업무</option>
+                  <option value="study">공부</option>
+                  <option value="health">건강</option>
+                  <option value="finance">재정</option>
+                </select>
+              </div>
+
+              <!-- Priority Selector -->
+              <div class="select-group">
+                <label for="taskPrioritySelect" class="meta-label"><i data-lucide="flag"></i></label>
+                <select id="taskPrioritySelect" class="meta-select">
+                  <option value="medium">중간 우선순위 ⚡</option>
+                  <option value="high">높은 우선순위 🔥</option>
+                  <option value="low">낮은 우선순위 🌱</option>
+                </select>
+              </div>
+
+              <!-- Due Date Picker -->
+              <div class="select-group">
+                <label for="taskDueDateInput" class="meta-label"><i data-lucide="calendar"></i></label>
+                <input type="date" id="taskDueDateInput" class="meta-date-input">
+              </div>
+
+              <!-- Notes Toggle Button -->
+              <button type="button" id="toggleNotesBtn" class="btn-subtle" title="상세 메모 추가">
+                <i data-lucide="file-text"></i>
+                <span id="notesToggleText">메모 추가</span>
+              </button>
+            </div>
+
+            <!-- Expandable Notes Input -->
+            <div id="notesInputWrapper" class="notes-wrapper hidden">
+              <textarea 
+                id="taskNotesInput" 
+                class="task-notes-textarea" 
+                placeholder="상세 내용이나 세부 체크 항목을 자유롭게 적어보세요..." 
+                rows="2"
+              ></textarea>
+            </div>
+          </form>
+        </div>
+
+        <!-- Filter & Search Toolbar -->
+        <div class="card toolbar-card">
+          <!-- Search Box -->
+          <div class="search-box">
+            <i data-lucide="search" class="search-icon"></i>
+            <input 
+              type="text" 
+              id="searchInput" 
+              class="search-input" 
+              placeholder="할 일 검색... (단축키: /)" 
+            >
+            <button id="clearSearchBtn" class="btn-clear-search hidden" title="검색어 지우기">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <div class="filter-sort-group">
+            <!-- Status Tabs -->
+            <div class="status-tabs" id="statusTabs" role="tablist">
+              <button class="status-tab active" data-status="all" role="tab">전체</button>
+              <button class="status-tab" data-status="active" role="tab">진행중</button>
+              <button class="status-tab" data-status="completed" role="tab">완료됨</button>
+              <button class="status-tab" data-status="important" role="tab">중요 ⭐</button>
+            </div>
+
+            <!-- Sort By Select -->
+            <div class="sort-wrapper">
+              <select id="sortSelect" class="sort-select" title="정렬 기준">
+                <option value="created-desc">최신 등록순</option>
+                <option value="due-asc">마감 임박순</option>
+                <option value="priority-desc">우선순위 높은순</option>
+                <option value="title-asc">가나다순</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Task List Section -->
+        <div class="task-list-section">
+          <div class="task-list-header">
+            <div class="list-title-wrap">
+              <h2 id="currentViewTitle">모든 할 일</h2>
+              <span id="filteredCountBadge" class="count-badge">0개</span>
+            </div>
+            
+            <div class="list-actions">
+              <button id="markAllCompletedBtn" class="btn-subtle" title="모두 완료 처리">
+                <i data-lucide="check-square"></i> 전체 완료
+              </button>
+            </div>
+          </div>
+
+          <!-- Empty State View -->
+          <div id="emptyState" class="empty-state hidden">
+            <div class="empty-illustration">
+              <div class="empty-icon-circle">
+                <i data-lucide="clipboard-list"></i>
+              </div>
+            </div>
+            <h3 id="emptyStateTitle">등록된 할 일이 없습니다</h3>
+            <p id="emptyStateDesc">새로운 목표나 오늘 해야 할 일을 추가하여 하루를 시작해보세요!</p>
+          </div>
+
+          <!-- Task Items List (Drag & Drop Target) -->
+          <ul id="taskList" class="task-list" aria-label="할 일 목록">
+            <!-- Task items dynamically rendered by app.js -->
+          </ul>
+        </div>
+
+      </main>
+    </div>
+
+    <!-- Edit Task Modal -->
+    <div id="editModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="modalTitle">할 일 수정</h3>
+          <button id="closeModalBtn" class="btn-icon" aria-label="모달 닫기">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+
+        <form id="editForm" class="modal-form">
+          <input type="hidden" id="editTaskId">
+          
+          <div class="form-group">
+            <label for="editTitleInput">할 일 제목</label>
+            <input type="text" id="editTitleInput" class="form-input" required maxlength="120">
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="editCategorySelect">카테고리</label>
+              <select id="editCategorySelect" class="form-select">
+                <option value="personal">개인</option>
+                <option value="work">업무</option>
+                <option value="study">공부</option>
+                <option value="health">건강</option>
+                <option value="finance">재정</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="editPrioritySelect">우선순위</label>
+              <select id="editPrioritySelect" class="form-select">
+                <option value="high">높음 🔥</option>
+                <option value="medium">중간 ⚡</option>
+                <option value="low">낮음 🌱</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="editDueDateInput">마감 기한</label>
+            <input type="date" id="editDueDateInput" class="form-input">
+          </div>
+
+          <div class="form-group">
+            <label for="editNotesTextarea">상세 메모</label>
+            <textarea id="editNotesTextarea" class="form-textarea" rows="3"></textarea>
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" id="cancelEditBtn" class="btn-secondary">취소</button>
+            <button type="submit" class="btn-primary">저장하기</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>오늘하루 WebApp &copy; 2026 • 생산성을 위한 모던 투두리스트</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
