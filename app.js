@@ -232,8 +232,130 @@
     toastContainer: document.getElementById('toastContainer')
   };
 
-  // --- Storage Helper ---
-  function loadTasks() {
+  // --- Local cache & Supabase synchronization ---
+  // The app keeps a local cache so it remains usable while offline. When
+  // Supabase is configured, every change is also written to the signed-in
+  // anonymous user's private task rows.
+  let supabaseClient = null;
+  let supabaseUser = null;
+  let supabaseSyncQueue = Promise.resolve();
+  let supabaseLastError = null;
+
+  function getSupabaseConfig() {
+    const config = window.SUPABASE_CONFIG;
+    if (!config || !config.url || !config.anonKey) return null;
+    if (config.url.includes('YOUR_PROJECT') || config.anonKey.includes('YOUR_')) return null;
+    return config;
+  }
+
+  async function connectSupabase() {
+    const config = getSupabaseConfig();
+    if (!config) {
+      supabaseLastError = new Error('Supabase configuration is missing.');
+      return false;
+    }
+    if (!window.supabase) {
+      supabaseLastError = new Error('Supabase client library could not be loaded.');
+      return false;
+    }
+
+    try {
+      supabaseClient = window.supabase.createClient(config.url, config.anonKey);
+      const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+      if (sessionError) throw sessionError;
+
+      let session = sessionData.session;
+      if (!session) {
+        const { data, error } = await supabaseClient.auth.signInAnonymously();
+        if (error) throw error;
+        session = data.session;
+      }
+
+      if (!session || !session.user) throw new Error('Supabase anonymous sign-in did not return a user.');
+      supabaseUser = session.user;
+      supabaseLastError = null;
+      return true;
+    } catch (error) {
+      console.error('Supabase connection failed. Continuing with local storage.', error);
+      supabaseLastError = error;
+      supabaseClient = null;
+      supabaseUser = null;
+      return false;
+    }
+  }
+
+  function taskToRow(task) {
+    return {
+      id: task.id,
+      title: task.title,
+      category: task.category,
+      priority: task.priority,
+      due_date: task.dueDate || null,
+      notes: task.notes || '',
+      is_completed: Boolean(task.completed),
+      is_starred: Boolean(task.starred),
+      sort_order: Number.isFinite(task.order) ? task.order : 0,
+      created_at: Number.isFinite(task.createdAt) ? task.createdAt : Date.now()
+    };
+  }
+
+  function rowToTask(row) {
+    return {
+      id: row.id,
+      title: row.title,
+      category: row.category,
+      priority: row.priority,
+      dueDate: row.due_date || '',
+      notes: row.notes || '',
+      completed: Boolean(row.is_completed),
+      starred: Boolean(row.is_starred),
+      createdAt: row.created_at,
+      order: row.sort_order
+    };
+  }
+
+  async function replaceRemoteTasks(tasks) {
+    if (!supabaseClient || !supabaseUser) return;
+
+    const { data: currentRows, error: readError } = await supabaseClient
+      .from('tasks')
+      .select('id');
+    if (readError) throw readError;
+
+    const rows = tasks.map(taskToRow);
+    if (rows.length) {
+      const { error } = await supabaseClient
+        .from('tasks')
+        .upsert(rows, { onConflict: 'id' });
+      if (error) throw error;
+    }
+
+    const activeIds = new Set(rows.map(row => row.id));
+    const removedIds = (currentRows || [])
+      .map(row => row.id)
+      .filter(id => !activeIds.has(id));
+    if (removedIds.length) {
+      const { error } = await supabaseClient
+        .from('tasks')
+        .delete()
+        .in('id', removedIds);
+      if (error) throw error;
+    }
+  }
+
+  function queueSupabaseSync() {
+    if (!supabaseClient || !supabaseUser) return;
+    const snapshot = state.tasks.map(task => ({ ...task }));
+    supabaseSyncQueue = supabaseSyncQueue
+      .then(() => replaceRemoteTasks(snapshot))
+      .catch(error => {
+        supabaseLastError = error;
+        console.error('Supabase sync failed. Local changes were kept.', error);
+        showToast('Supabase 저장에 실패했습니다. 브라우저 콘솔을 확인해 주세요.', 'danger');
+      });
+  }
+
+  async function loadTasks() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
@@ -246,11 +368,33 @@
       console.error('Error loading tasks:', e);
       state.tasks = [...DEFAULT_TASKS];
     }
+
+    const connected = await connectSupabase();
+    if (!connected) return;
+
+    try {
+      const { data: remoteRows, error } = await supabaseClient
+        .from('tasks')
+        .select('*')
+        .order('sort_order', { ascending: true });
+      if (error) throw error;
+
+      if (remoteRows && remoteRows.length) {
+        state.tasks = remoteRows.map(rowToTask);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
+      } else if (state.tasks.length) {
+        await replaceRemoteTasks(state.tasks);
+      }
+    } catch (error) {
+      supabaseLastError = error;
+      console.error('Could not load tasks from Supabase. Continuing with local storage.', error);
+    }
   }
 
   function saveTasks() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
+      queueSupabaseSync();
     } catch (e) {
       console.error('Error saving tasks:', e);
     }
@@ -937,7 +1081,7 @@
   }
 
   // --- Initial Setup ---
-  function init() {
+  async function init() {
     // Set Theme
     elements.appHtml.setAttribute('data-theme', state.theme);
     elements.themeIcon.setAttribute('data-lucide', state.theme === 'dark' ? 'sun' : 'moon');
@@ -951,9 +1095,15 @@
       elements.dailyQuote.textContent = randomQuote;
     }
 
-    loadTasks();
+    await loadTasks();
     initEvents();
     updateUI();
+
+    if (supabaseUser && !supabaseLastError) {
+      showToast('Supabase 데이터베이스에 연결되었습니다.', 'success');
+    } else if (supabaseLastError) {
+      showToast('Supabase 연결에 실패해 로컬 저장소를 사용합니다.', 'danger');
+    }
   }
 
   // Run on DOM Ready
